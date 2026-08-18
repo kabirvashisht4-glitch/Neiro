@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readdir, stat } from 'node:fs/promises'
 import { basename, extname, join, relative, resolve } from 'node:path'
 
@@ -7,6 +8,15 @@ export const AUDIO_EXTENSIONS = new Set([
 ])
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg', '.cache', '.Trash'])
+
+/**
+ * A stable id for a track, derived from its path inside the library rather than
+ * its position in the scan. Adding or deleting files must not renumber
+ * everything, or saved playlists would silently point at the wrong songs.
+ */
+export function trackId(rel) {
+  return createHash('sha1').update(rel).digest('hex').slice(0, 10)
+}
 
 /** "03 - Some Song.mp3" -> "Some Song" */
 export function prettyName(fileName) {
@@ -56,14 +66,15 @@ export async function scan(root, { maxDepth = 8 } = {}) {
   found.sort((a, b) => relative(base, a).localeCompare(relative(base, b), undefined, { numeric: true }))
 
   return Promise.all(
-    found.map(async (path, i) => {
+    found.map(async (path) => {
       const s = await stat(path).catch(() => null)
+      const rel = relative(base, path) || basename(path)
       return {
-        id: String(i),
+        id: trackId(rel),
         path,
         fileName: basename(path),
         title: prettyName(path),
-        rel: relative(base, path) || basename(path),
+        rel,
         size: s ? s.size : 0,
       }
     }),

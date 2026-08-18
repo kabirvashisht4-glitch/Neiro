@@ -92,6 +92,32 @@ async function sendFile(req, res, path) {
   createReadStream(path).pipe(res)
 }
 
+/** Read a JSON body, capped so a stray request can't exhaust memory. */
+function readJson(req, limit = 1 << 20) {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks = []
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > limit) {
+        reject(new Error('Body too large'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      if (chunks.length === 0) return resolve({})
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch {
+        reject(new Error('Invalid JSON'))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
 function json(res, code, body) {
   const payload = JSON.stringify(body)
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' })
@@ -103,19 +129,14 @@ function json(res, code, body) {
  * @param {Array}  options.tracks  from scan()
  * @param {string} options.uiDir   directory holding the built player
  * @param {string} options.root    the folder that was scanned (shown in the UI)
+ * @param {import('./store.js').Store} options.store  persisted playlists and stats
  */
-export function createNeiroServer({ tracks, uiDir, root }) {
-  // Tracks are addressed by index, never by a client-supplied path, so there is
-  // no traversal surface on the audio route.
+export function createNeiroServer({ tracks, uiDir, root, store }) {
+  // Tracks are addressed by a stable id, never by a client-supplied path, so
+  // there is no traversal surface on the audio route.
   const byId = new Map(tracks.map((t) => [t.id, t]))
 
   return createServer(async (req, res) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { allow: 'GET, HEAD' })
-      res.end()
-      return
-    }
-
     let pathname
     try {
       pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname)
@@ -135,8 +156,93 @@ export function createNeiroServer({ tracks, uiDir, root }) {
           title: t.title,
           rel: t.rel,
           size: t.size,
+          plays: store?.state.stats[t.id]?.plays ?? 0,
         })),
+        playlists: store?.listPlaylists() ?? [],
+        resume: store?.state.resume ?? null,
       })
+      return
+    }
+
+    if (store) {
+      // ── playlists ──────────────────────────────────────────────
+      if (pathname === '/api/playlists') {
+        if (req.method === 'GET') return json(res, 200, { playlists: store.listPlaylists() })
+        if (req.method === 'POST') {
+          let body
+          try {
+            body = await readJson(req)
+          } catch (err) {
+            return json(res, 400, { error: err.message })
+          }
+          return json(res, 201, { playlist: store.createPlaylist(body.name, body.trackIds ?? []) })
+        }
+        return json(res, 405, { error: 'Use GET or POST' })
+      }
+
+      const playlistMatch = /^\/api\/playlists\/([\w-]+)(\/tracks)?$/.exec(pathname)
+      if (playlistMatch) {
+        const [, id, tracksSuffix] = playlistMatch
+        let body = {}
+        if (req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT') {
+          try {
+            body = await readJson(req)
+          } catch (err) {
+            return json(res, 400, { error: err.message })
+          }
+        }
+
+        if (tracksSuffix) {
+          if (req.method === 'POST') {
+            const updated = store.addToPlaylist(id, body.trackIds ?? [])
+            return updated
+              ? json(res, 200, { playlist: updated })
+              : json(res, 404, { error: 'No such playlist' })
+          }
+          if (req.method === 'DELETE') {
+            const trackId = new URL(req.url, 'http://localhost').searchParams.get('trackId')
+            const updated = store.removeFromPlaylist(id, trackId)
+            return updated
+              ? json(res, 200, { playlist: updated })
+              : json(res, 404, { error: 'No such playlist' })
+          }
+          return json(res, 405, { error: 'Use POST or DELETE' })
+        }
+
+        if (req.method === 'PATCH' || req.method === 'PUT') {
+          const updated = store.updatePlaylist(id, body)
+          return updated
+            ? json(res, 200, { playlist: updated })
+            : json(res, 404, { error: 'No such playlist' })
+        }
+        if (req.method === 'DELETE') {
+          return store.deletePlaylist(id)
+            ? json(res, 200, { ok: true })
+            : json(res, 404, { error: 'No such playlist' })
+        }
+        return json(res, 405, { error: 'Use PATCH or DELETE' })
+      }
+
+      // ── playback state ─────────────────────────────────────────
+      if (pathname === '/api/state' && req.method === 'PUT') {
+        let body
+        try {
+          body = await readJson(req)
+        } catch (err) {
+          return json(res, 400, { error: err.message })
+        }
+        return json(res, 200, { resume: store.setResume(body.trackId ?? null, body.position) })
+      }
+
+      const playedMatch = /^\/api\/tracks\/([\w-]+)\/played$/.exec(pathname)
+      if (playedMatch && req.method === 'POST') {
+        return json(res, 200, { stats: store.markPlayed(playedMatch[1]) })
+      }
+    }
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { allow: 'GET, HEAD' })
+      res.end()
       return
     }
 

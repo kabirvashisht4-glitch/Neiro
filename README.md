@@ -32,6 +32,8 @@ FLAC, OGG, M4A, Opus and anything else the browser can decode.
 - **ID3 tags** — a dependency-free parser reads title, artist, album and cover art.
 - **Media Session** — hardware play buttons and lock-screen controls work.
 - **Adjustable hue** — one slider recolors the whole interface and every visualizer.
+- **Playlists that stick around** — when the CLI is serving your library, playlists,
+  play counts and your resume position are saved to disk.
 
 Settings persist to `localStorage`; audio never does.
 
@@ -71,8 +73,18 @@ npx neiro-cli ~/Music
 ```
 
 It indexes the folder, serves the player on localhost and streams files straight off
-disk with HTTP range support, so seeking is instant. Tracks are addressed by index
-rather than path, and the server binds to `127.0.0.1` by default.
+disk with HTTP range support, so seeking is instant. Tracks are addressed by a stable
+hash rather than a path, and the server binds to `127.0.0.1` by default.
+
+Playlists you make in the player are written to `~/.neiro/library.json`, alongside play
+counts and your last position — so nothing is lost when the process stops. Run it with
+`--daemon` and closing the terminal won't stop it:
+
+```bash
+neiro ~/Music --daemon   # detached; survives closing the terminal
+neiro status
+neiro stop
+```
 
 See [`packages/neiro-cli`](packages/neiro-cli) for all options.
 

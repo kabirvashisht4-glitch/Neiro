@@ -10,11 +10,14 @@ import {
   SlidersIcon,
 } from './components/Icons'
 import { Playlist } from './components/Playlist'
+import { PlaylistBar } from './components/PlaylistBar'
 import { ShortcutsDialog } from './components/ShortcutsDialog'
 import { TransportBar } from './components/TransportBar'
 import { VisualizerCanvas } from './components/VisualizerCanvas'
 import { readTags } from './lib/id3'
 import { prettyName } from './lib/format'
+import * as library from './lib/library'
+import type { Playlist as SavedPlaylist } from './lib/library'
 import { loadSettings, saveSettings } from './lib/storage'
 import { VISUALIZER_MODES } from 'neiro-visualizer'
 import type { VisualizerMode } from 'neiro-visualizer'
@@ -47,34 +50,6 @@ function release(track: Track): void {
   if (track.artwork?.startsWith('blob:')) URL.revokeObjectURL(track.artwork)
 }
 
-type ServerTrack = { id: string; url: string; fileName: string; title: string; size: number }
-
-/**
- * When the page is served by `neiro-cli`, /api/tracks lists the folder it was
- * pointed at. Anywhere else the fetch simply 404s and we stay drag-and-drop only.
- */
-async function fetchLibrary(): Promise<Track[]> {
-  try {
-    const response = await fetch('/api/tracks')
-    if (!response.ok) return []
-    const data = (await response.json()) as { tracks?: ServerTrack[] }
-    if (!Array.isArray(data.tracks)) return []
-    return data.tracks.map((track) => ({
-      id: `srv-${track.id}`,
-      url: track.url,
-      fileName: track.fileName,
-      title: track.title || prettyName(track.fileName),
-      artist: 'Unknown artist',
-      album: '',
-      artwork: null,
-      size: track.size,
-      duration: null,
-    }))
-  } catch {
-    return []
-  }
-}
-
 export default function App() {
   const [tracks, setTracks] = useState<Track[]>([])
   const [currentId, setCurrentId] = useState<string | null>(null)
@@ -89,6 +64,8 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [settings, setSettings] = useState<Settings>(loadSettings)
+  const [playlists, setPlaylists] = useState<SavedPlaylist[]>([])
+  const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null)
 
   const audioRef = useRef<HTMLAudioElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -97,6 +74,16 @@ export default function App() {
   const autoPlayRef = useRef(false)
 
   const current = tracks.find((track) => track.id === currentId) ?? null
+
+  const activePlaylist = playlists.find((playlist) => playlist.id === activePlaylistId) ?? null
+  // Skip/next and the list both follow whatever is on screen, so a playlist
+  // behaves like a queue rather than a filter you can play out of.
+  const queue = activePlaylist
+    ? library
+        .playlistTrackIds(activePlaylist)
+        .map((id) => tracks.find((track) => track.id === id))
+        .filter((track): track is Track => track !== undefined)
+    : tracks
 
   const update = useCallback((patch: Partial<Settings>) => {
     setSettings((prev) => ({ ...prev, ...patch }))
@@ -278,6 +265,33 @@ export default function App() {
     setDuration(0)
   }, [])
 
+  /* Count one play per track selection, not per un-pause. */
+  const countedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!isPlaying || !currentId || countedRef.current === currentId) return
+    countedRef.current = currentId
+    library.markPlayed(currentId)
+  }, [currentId, isPlaying])
+
+  /* Persist the resume point — throttled while playing, and once on pause so
+     the exact spot survives closing the tab. */
+  const savedAtRef = useRef(0)
+  const timeRef = useRef(time)
+  timeRef.current = time
+
+  useEffect(() => {
+    if (!currentId || !isPlaying) return
+    const now = Date.now()
+    if (now - savedAtRef.current < 5000) return
+    savedAtRef.current = now
+    library.saveResume(currentId, time)
+  }, [currentId, isPlaying, time])
+
+  useEffect(() => {
+    if (isPlaying || !currentId) return
+    library.saveResume(currentId, timeRef.current)
+  }, [currentId, isPlaying])
+
   /* ------------------------------------------------------------ transport */
 
   const stopMic = useCallback(() => {
@@ -303,19 +317,19 @@ export default function App() {
 
   const skip = useCallback(
     (delta: number) => {
-      if (tracks.length === 0) return
-      const index = tracks.findIndex((track) => track.id === currentId)
+      if (queue.length === 0) return
+      const index = queue.findIndex((track) => track.id === currentId)
       let next: number
-      if (settings.shuffle && tracks.length > 1) {
+      if (settings.shuffle && queue.length > 1) {
         do {
-          next = Math.floor(Math.random() * tracks.length)
+          next = Math.floor(Math.random() * queue.length)
         } while (next === index)
       } else {
-        next = (index + delta + tracks.length) % tracks.length
+        next = (index + delta + queue.length) % queue.length
       }
-      select(tracks[next].id, true)
+      select(queue[next].id, true)
     },
-    [currentId, select, settings.shuffle, tracks],
+    [currentId, queue, select, settings.shuffle],
   )
 
   const seek = useCallback((seconds: number) => {
@@ -333,14 +347,14 @@ export default function App() {
       void audio.play()
       return
     }
-    const index = tracks.findIndex((track) => track.id === currentId)
-    const isLast = index === tracks.length - 1
+    const index = queue.findIndex((track) => track.id === currentId)
+    const isLast = index === queue.length - 1
     if (isLast && settings.repeat === 'off' && !settings.shuffle) {
       setIsPlaying(false)
       return
     }
     skip(1)
-  }, [currentId, settings.repeat, settings.shuffle, skip, tracks])
+  }, [currentId, queue, settings.repeat, settings.shuffle, skip])
 
   const toggleMic = useCallback(async () => {
     if (micOn) {
@@ -437,13 +451,19 @@ export default function App() {
 
   /* --------------------------------------------------------- server library */
 
+  const resumeRef = useRef<library.Resume>(null)
+
   useEffect(() => {
     let cancelled = false
-    void fetchLibrary().then((library) => {
-      if (cancelled || library.length === 0) return
-      setTracks((prev) => (prev.length > 0 ? prev : library))
-      setCurrentId((prev) => prev ?? library[0].id)
-      for (const track of library) {
+    void library.loadLibrary().then((snapshot) => {
+      if (cancelled || !snapshot) return
+      setTracks((prev) => (prev.length > 0 ? prev : snapshot.tracks))
+      setPlaylists(snapshot.playlists)
+      resumeRef.current = snapshot.resume
+      // Pick up where you left off, paused — never start playing unprompted.
+      const start = snapshot.resume?.trackId ?? snapshot.tracks[0].id
+      setCurrentId((prev) => prev ?? start)
+      for (const track of snapshot.tracks) {
         void probeDuration(track.url).then((value) => {
           if (value == null) return
           setTracks((prev) =>
@@ -456,6 +476,38 @@ export default function App() {
       cancelled = true
     }
   }, [])
+
+  /* ------------------------------------------------------------- playlists */
+
+  const createPlaylist = useCallback(
+    (name: string) => {
+      void library.createPlaylist(name).then((playlist) => {
+        if (!playlist) return flash('Playlists need the Neiro CLI — run `neiro <folder>`.')
+        setPlaylists((prev) => [...prev, playlist])
+        setActivePlaylistId(playlist.id)
+      })
+    },
+    [flash],
+  )
+
+  const removePlaylist = useCallback((id: string) => {
+    void library.deletePlaylist(id).then((ok) => {
+      if (!ok) return
+      setPlaylists((prev) => prev.filter((playlist) => playlist.id !== id))
+      setActivePlaylistId((prev) => (prev === id ? null : prev))
+    })
+  }, [])
+
+  const addToPlaylist = useCallback(
+    (playlistId: string, trackId: string) => {
+      void library.addToPlaylist(playlistId, [trackId]).then((playlist) => {
+        if (!playlist) return
+        setPlaylists((prev) => prev.map((item) => (item.id === playlist.id ? playlist : item)))
+        flash(`Added to ${playlist.name}.`)
+      })
+    },
+    [flash],
+  )
 
   /* --------------------------------------------------------- media session */
 
@@ -648,15 +700,31 @@ export default function App() {
         {panelOpen && (
           <aside className="h-[42vh] w-full shrink-0 overflow-hidden border-t border-white/10 bg-[#0d0d0f] lg:h-auto lg:w-[360px] lg:border-t-0 lg:border-l">
             {panel === 'queue' ? (
-              <Playlist
-                tracks={tracks}
-                currentId={currentId}
-                isPlaying={isPlaying}
-                onSelect={(id) => select(id, true)}
-                onRemove={removeTrack}
-                onClear={clearAll}
-                onFiles={addFiles}
-              />
+              <div className="flex h-full flex-col">
+                {playlists.length > 0 || tracks.some((track) => library.isServerTrack(track.id)) ? (
+                  <PlaylistBar
+                    playlists={playlists}
+                    activeId={activePlaylistId}
+                    onSelect={setActivePlaylistId}
+                    onCreate={createPlaylist}
+                    onDelete={removePlaylist}
+                  />
+                ) : null}
+                <div className="min-h-0 flex-1">
+                  <Playlist
+                    tracks={queue}
+                    currentId={currentId}
+                    isPlaying={isPlaying}
+                    onSelect={(id) => select(id, true)}
+                    onRemove={removeTrack}
+                    onClear={clearAll}
+                    onFiles={addFiles}
+                    playlists={playlists}
+                    activePlaylistId={activePlaylistId}
+                    onAddToPlaylist={addToPlaylist}
+                  />
+                </div>
+              </div>
             ) : (
               <Equalizer
                 gains={settings.eq}
@@ -716,6 +784,15 @@ export default function App() {
           const value = event.currentTarget.duration
           setDuration(Number.isFinite(value) ? value : 0)
           event.currentTarget.playbackRate = settings.rate
+          const resume = resumeRef.current
+          const length = Number.isFinite(value) ? value : 0
+          // Only worth resuming somewhere in the middle: a saved point at the
+          // very end would fire `ended` the moment playback starts.
+          if (resume && resume.trackId === currentId && resume.position > 1 && resume.position < length - 3) {
+            event.currentTarget.currentTime = resume.position
+            setTime(resume.position)
+          }
+          resumeRef.current = null
         }}
         onError={() => {
           if (currentId) flash('That file could not be decoded by this browser.')

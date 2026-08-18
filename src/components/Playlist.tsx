@@ -1,6 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
 import { formatBytes, formatTime } from '../lib/format'
+import type { Playlist as SavedPlaylist } from '../lib/library'
 import type { Track } from '../types'
-import { CloseIcon, MusicIcon } from './Icons'
+import { CloseIcon, MusicIcon, PlusIcon } from './Icons'
 import { DropZone } from './DropZone'
 
 type Props = {
@@ -11,6 +13,11 @@ type Props = {
   onRemove: (id: string) => void
   onClear: () => void
   onFiles: (files: FileList | null) => void
+  /** Saved playlists, when the CLI is serving the library. */
+  playlists?: SavedPlaylist[]
+  /** Set while viewing one playlist rather than the whole library. */
+  activePlaylistId?: string | null
+  onAddToPlaylist?: (playlistId: string, trackId: string) => void
 }
 
 export function Playlist({
@@ -21,7 +28,24 @@ export function Playlist({
   onRemove,
   onClear,
   onFiles,
+  playlists = [],
+  activePlaylistId = null,
+  onAddToPlaylist,
 }: Props) {
+  // Which row's "add to playlist" menu is open, if any.
+  const [menuFor, setMenuFor] = useState<string | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (menuFor === null) return
+    const close = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuFor(null)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [menuFor])
+
+  const canAdd = playlists.length > 0 && onAddToPlaylist !== undefined
   const known = tracks.filter((track) => track.duration != null)
   const total = known.reduce((sum, track) => sum + (track.duration ?? 0), 0)
 
@@ -29,7 +53,9 @@ export function Playlist({
     <section className="flex h-full flex-col">
       <header className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
         <div>
-          <h2 className="text-sm font-semibold tracking-tight">Queue</h2>
+          <h2 className="text-sm font-semibold tracking-tight">
+            {playlists.find((p) => p.id === activePlaylistId)?.name ?? 'Queue'}
+          </h2>
           <p className="text-xs text-white/40">
             {tracks.length} track{tracks.length === 1 ? '' : 's'}
             {known.length > 0 && ` · ${formatTime(total)}`}
@@ -52,7 +78,9 @@ export function Playlist({
       <ol className="flex-1 space-y-1 overflow-y-auto p-2">
         {tracks.length === 0 && (
           <li className="px-3 py-8 text-center text-xs text-white/35">
-            Your queue is empty. Drop files anywhere on the page.
+            {activePlaylistId
+              ? 'This playlist is empty. Add tracks from All tracks.'
+              : 'Your queue is empty. Drop files anywhere on the page.'}
           </li>
         )}
         {tracks.map((track, index) => {
@@ -112,6 +140,48 @@ export function Playlist({
                 <span className="shrink-0 text-xs tabular-nums text-white/40">
                   {track.duration != null ? formatTime(track.duration) : '--:--'}
                 </span>
+
+                {canAdd && (
+                  <span className="relative shrink-0">
+                    <button
+                      type="button"
+                      aria-label={`Add ${track.title} to a playlist`}
+                      aria-expanded={menuFor === track.id}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setMenuFor((open) => (open === track.id ? null : track.id))
+                      }}
+                      className="rounded-full p-1 text-white/25 opacity-0 transition hover:bg-white/10 hover:text-white group-hover:opacity-100 focus-visible:opacity-100"
+                    >
+                      <PlusIcon className="h-3.5 w-3.5" />
+                    </button>
+
+                    {menuFor === track.id && (
+                      <div
+                        ref={menuRef}
+                        className="absolute right-0 z-30 mt-1 w-44 overflow-hidden rounded-xl border border-white/15 bg-neutral-900 py-1 shadow-2xl"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <p className="px-3 py-1 text-[10px] tracking-wider text-white/35 uppercase">
+                          Add to
+                        </p>
+                        {playlists.map((playlist) => (
+                          <button
+                            key={playlist.id}
+                            type="button"
+                            onClick={() => {
+                              onAddToPlaylist?.(playlist.id, track.id)
+                              setMenuFor(null)
+                            }}
+                            className="block w-full truncate px-3 py-1.5 text-left text-xs text-white/75 transition hover:bg-white/10 hover:text-white"
+                          >
+                            {playlist.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </span>
+                )}
 
                 <button
                   type="button"
