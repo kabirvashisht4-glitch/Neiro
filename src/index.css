@@ -1,0 +1,175 @@
+@import "tailwindcss";
+
+:root {
+  --hue: 152;
+  --accent: hsl(var(--hue) 90% 55%);
+  --accent-soft: hsl(var(--hue) 90% 55% / 0.14);
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0a0a0b;
+  color: #fff;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
+    Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+::selection {
+  background: var(--accent);
+  color: #000;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.accent-glow {
+  box-shadow: 0 0 28px -6px hsl(var(--hue) 90% 55% / 0.55);
+}
+
+/* ---------------------------------------------------------------- sliders */
+
+.range {
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.14);
+  cursor: pointer;
+}
+
+.range::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
+  box-shadow: 0 0 10px hsl(var(--hue) 90% 55% / 0.9);
+  transition: transform 0.12s ease;
+}
+
+.range:active::-webkit-slider-thumb {
+  transform: scale(1.25);
+}
+
+.range::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: none;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.range:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.hue-range {
+  background: linear-gradient(
+    to right,
+    hsl(0 90% 55%),
+    hsl(60 90% 55%),
+    hsl(120 90% 55%),
+    hsl(180 90% 55%),
+    hsl(240 90% 55%),
+    hsl(300 90% 55%),
+    hsl(360 90% 55%)
+  );
+}
+
+.range-vertical {
+  appearance: none;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 6px;
+  height: 128px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.14);
+  cursor: pointer;
+}
+
+.range-vertical::-webkit-slider-thumb {
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px hsl(var(--hue) 90% 55% / 0.8);
+}
+
+.range-vertical::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ------------------------------------------------------- now-playing bars */
+
+.equalizer-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1.5px;
+  height: 12px;
+}
+
+.equalizer-bars i {
+  width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: bounce 0.9s ease-in-out infinite;
+}
+
+.equalizer-bars i:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.equalizer-bars i:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+@keyframes bounce {
+  0%,
+  100% {
+    height: 30%;
+  }
+  50% {
+    height: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .equalizer-bars i {
+    animation: none;
+    height: 60%;
+  }
+}
+
+/* ------------------------------------------------------------- scrollbars */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.18) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.16);
+  border-radius: 999px;
+}

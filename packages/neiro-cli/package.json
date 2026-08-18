@@ -1,0 +1,31 @@
+{
+  "name": "neiro-cli",
+  "version": "0.1.0",
+  "description": "Play a folder of music in your browser with a live spectrum visualizer. Streams from disk — nothing is uploaded.",
+  "keywords": [
+    "audio",
+    "player",
+    "music",
+    "cli",
+    "visualizer",
+    "spectrum",
+    "localhost"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "neiro": "bin/neiro.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "ui",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "prepack": "node -e \"const{cpSync,existsSync}=require('node:fs');if(!existsSync('../../dist/index.html')){console.error('Run `npm run build` at the repo root first.');process.exit(1)}cpSync('../../dist','ui',{recursive:true})\""
+  }
+}
